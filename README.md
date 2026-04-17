@@ -15,7 +15,6 @@ Screenshot:
 
 ## Installation
 
-- __Manual installation (zip):__ Download the [zip](https://github.com/SublimeText-Markdown/MarkdownCodeExporter/archive/refs/heads/main.zip) of the repo and extract into `Packages/MarkdownCodeExporter`.
 - __Manual installation (git):__ Go to `Packages` folder and `git clone https://github.com/SublimeText-Markdown/MarkdownCodeExporter MarkdownCodeExporter`.
 - __Package Control:__ Search for `MarkdownCodeExporter`.
 
