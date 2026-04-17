@@ -15,79 +15,123 @@ class MarkdownCodeExporter(sublime_plugin.ViewEventListener):
 
         self.timeout_scheduled = False
         self.needs_update = False
+        
+        # 用于记录当前处于激活状态（鼠标悬停或光标所在）的代码块索引
+        self.active_blocks = set()
 
-        self.update_phantoms()
+        self.update_active_blocks(force_update=True)
 
     def on_modified(self):
-        # Don't operate on 1MB or larger files.
+        # 不处理大于 1MB 的文件，防止卡顿
         if self.view.size() > 2**20:
             return
 
-        # Call update_phantoms(), but not any more than 10 times a second
+        # 防抖动处理：限制更新频率
         if self.timeout_scheduled:
             self.needs_update = True
-
         else:
             self.timeout_scheduled = True
             sublime.set_timeout(lambda: self.handle_timeout(), 100)
-            self.update_phantoms()
+            self.update_active_blocks(force_update=True)
 
     def on_load(self):
-        self.update_phantoms()
+        self.update_active_blocks(force_update=True)
 
     def handle_timeout(self):
         self.timeout_scheduled = False
         if self.needs_update:
             self.needs_update = False
-            self.update_phantoms()
+            self.update_active_blocks(force_update=True)
 
-    def update_phantoms(self):
-        # Find all fenced code blocks
+    # 监听鼠标悬停事件
+    def on_hover(self, point, hover_zone):
+        if hover_zone != sublime.HOVER_TEXT:
+            return
+        self.update_active_blocks(hover_point=point)
+
+    # 监听光标位置改变事件
+    def on_selection_modified(self):
+        self.update_active_blocks()
+
+    def update_active_blocks(self, hover_point=None, force_update=False):
         code_blocks = self.find_code_blocks()
-        phantoms = []
+        new_active = set()
 
-        for region in code_blocks:
-            # Create phantom content
+        # 1. 检查光标是否在代码块内
+        for sel in self.view.sel():
+            for i, block in enumerate(code_blocks):
+                if block['region'].contains(sel):
+                    new_active.add(i)
+
+        # 2. 检查鼠标悬停点是否在代码块内
+        if hover_point is not None:
+            for i, block in enumerate(code_blocks):
+                if block['region'].contains(hover_point):
+                    new_active.add(i)
+
+        # 如果激活的代码块发生变化，或者强制要求更新（如文本被修改），则重绘 Phantom
+        if force_update or new_active != self.active_blocks:
+            self.active_blocks = new_active
+            self.update_phantoms(code_blocks)
+
+    def update_phantoms(self, code_blocks):
+        phantoms =[]
+
+        for i, block in enumerate(code_blocks):
+            # 如果当前代码块未被激活（无悬停、无光标），则跳过，不渲染按钮
+            if i not in self.active_blocks:
+                continue
+
+            region = block['region']
+            insertion_point = block['insertion_point']
+
+            # 创建 Phantom 的 HTML 内容
+            # 使用 var(--foreground) 和 alpha 透明度，使颜色更浅且自动适配深浅主题
             content = '''
                 <body id="markdown-code-exporter">
                     <style>
-                        div {
-                            padding: 0.2rem 0;
-                            margin-bottom: 3px;
+                        html, body {
+                            margin: 0;
+                            padding: 0;
+                        }
+                        .actions {
+                            margin-left: 1.5rem;
+                            font-size: 0.85rem;
                         }
                         a {
-                            padding: 0.4rem;
-                            border-radius: 5px;
-
-                            color: #000;
-                            background-color: #CCCCCC;
-
+                            padding: 0.15rem 0.5rem;
+                            margin-right: 0.4rem;
+                            border-radius: 4px;
+                            border: 1px solid color(var(--foreground) alpha(0.15));
+                            color: var(--foreground);
+                            background-color: color(var(--foreground) alpha(0.05));
                             text-decoration: none;
                         }
                     </style>
-                    <div>
+                    <div class="actions">
                         <a href="copy">copy</a>
                         <a href="new_tab">open in tab</a>
                     </div>
                 </body>
             '''
 
-            # Create and add phantom
+            # 创建并添加 Phantom
+            # 使用 LAYOUT_INLINE 将按钮追加在 ``` 语言名称的同一行末尾，防止画面上下跳动
             phantom = sublime.Phantom(
-                sublime.Region(region.begin() - 1, region.begin() - 1), # -1 puts the phantom to the previous line.
+                sublime.Region(insertion_point, insertion_point),
                 content,
-                sublime.LAYOUT_BLOCK,
-                on_navigate=lambda href, region=region: self.handle_phantom_click(href, region)
+                sublime.LAYOUT_INLINE,
+                on_navigate=lambda href, r=region: self.handle_phantom_click(href, r)
             )
             phantoms.append(phantom)
 
         self.phantom_set.update(phantoms)
 
     def find_code_blocks(self):
-        code_blocks = []
+        code_blocks =[]
         view = self.view
 
-        # Find all fenced code blocks (```)
+        # 查找所有 Markdown 代码块
         content = view.substr(sublime.Region(0, view.size()))
         pattern = r'^( *```+)[\w\-]*\n[\s\S]*?\n\1$'
         matches = re.finditer(pattern, content, re.MULTILINE)
@@ -95,38 +139,41 @@ class MarkdownCodeExporter(sublime_plugin.ViewEventListener):
         for match in matches:
             start = match.start()
             end = match.end()
-            code_blocks.append(sublime.Region(start, end))
+            
+            # 找到第一行（即 ```language 这一行）的末尾，作为按钮的插入点
+            first_line_end = content.find('\n', start)
+            if first_line_end == -1 or first_line_end > end:
+                first_line_end = end
+                
+            code_blocks.append({
+                'region': sublime.Region(start, end),
+                'insertion_point': first_line_end
+            })
 
         return code_blocks
 
     def handle_phantom_click(self, href, region):
-        # Get the code content (excluding the first and last lines with ```)
+        # 获取代码内容（排除首尾的 ``` 行）
         lines = self.view.substr(region).split('\n')
         code = '\n'.join(lines[1:-1]) + "\n"
 
         if href == "copy":
-            # Copy to clipboard
+            # 复制到剪贴板
             sublime.set_clipboard(code)
             sublime.status_message("Code copied to clipboard")
 
         elif href == "new_tab":
-            # Open in new tab
+            # 在新标签页中打开
             new_view = self.view.window().new_file()
             new_view.run_command('append', {'characters': code})
 
-            # Try to detect and set syntax
-            identifier = re.sub(r"^ *`+", "", lines[0]).strip().lower()  # Remove ``` and get language identifier
+            # 尝试检测并设置语法高亮
+            identifier = re.sub(r"^ *`+", "", lines[0]).strip().lower()
 
-            # We want to prevent mismatches. For example, "sql" might match with
-            # "Packages/Rails/SQL (Rails).sublime-syntax" before it matches with
-            # "Packages/SQL/SQL.sublime-syntax".
-            #
-            # There may be syntaxes here that Sublime Text doesn't have. Those will
-            # be skipped and the first existing syntax will be used.
-            id_syntax_map = [
+            id_syntax_map =[
                 {
                     "identifier": ["md", "markdown", "mdown"],
-                    "syntaxes": [
+                    "syntaxes":[
                         "Packages/MarkdownEditing/Markdown.sublime-syntax",
                         "Packages/MarkdownEditing/MultiMarkdown.tmLanguage",
                         "Packages/MarkdownEditing/Markdown (Standard).tmLanguage",
@@ -142,7 +189,7 @@ class MarkdownCodeExporter(sublime_plugin.ViewEventListener):
                 },
                 {
                     "identifier": ["html"],
-                    "syntaxes": [
+                    "syntaxes":[
                         "Packages/HTML/HTML.sublime-syntax",
                     ],
                 },
@@ -154,13 +201,13 @@ class MarkdownCodeExporter(sublime_plugin.ViewEventListener):
                 },
                 {
                     "identifier": ["php"],
-                    "syntaxes": [
+                    "syntaxes":[
                         "Packages/PHP/PHP.sublime-syntax",
                     ],
                 },
                 {
-                    "identifier": ["py", "python"],
-                    "syntaxes": [
+                    "identifier":["py", "python"],
+                    "syntaxes":[
                         "Packages/Python/Python.sublime-syntax",
                     ],
                 },
@@ -172,13 +219,13 @@ class MarkdownCodeExporter(sublime_plugin.ViewEventListener):
                 },
                 {
                     "identifier": ["sh", "shell"],
-                    "syntaxes": [
+                    "syntaxes":[
                         "Packages/ShellScript/Shell-Unix-Generic.sublime-syntax",
                     ],
                 },
                 {
                     "identifier": ["sql"],
-                    "syntaxes": [
+                    "syntaxes":[
                         "Packages/SQL/SQL.sublime-syntax",
                     ],
                 },
@@ -193,13 +240,10 @@ class MarkdownCodeExporter(sublime_plugin.ViewEventListener):
                 if not identifier in mapping["identifier"]:
                     continue
 
-                # Now find the first syntax that Sublime Text supports.
                 for syntax in mapping["syntaxes"]:
                     if syntax in syntax_files:
                         new_view.assign_syntax(syntax)
                         return
-
-            # There were no match with "id_syntax_map". Now do a plain search.
 
             for syntax_file in syntax_files:
                 if identifier in os.path.basename(syntax_file.lower()):
