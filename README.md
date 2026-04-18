@@ -9,7 +9,7 @@ Currently supported actions:
 
 Screenshot:
 
-![image](screenshots/image.png)
+![image](screenshots/screenshot-1.gif)
 
 (Color scheme in the screenshot comes from MarkdownEditing plugin.)
 
