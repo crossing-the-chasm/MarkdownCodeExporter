@@ -11,12 +11,9 @@ Screenshot:
 
 ![image](screenshots/screenshot-1.gif)
 
-(Color scheme in the screenshot comes from MarkdownEditing plugin.)
-
 ## Installation
 
-- __Manual installation (git):__ Go to `Packages` folder and `git clone https://github.com/SublimeText-Markdown/MarkdownCodeExporter MarkdownCodeExporter`.
-- __Package Control:__ Search for `MarkdownCodeExporter`.
+Go to `Packages` folder and `git clone https://github.com/SublimeText-Markdown/MarkdownCodeExporter MarkdownCodeExporter`.
 
 ## Usage
 
